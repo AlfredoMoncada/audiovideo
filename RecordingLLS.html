@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>L3 Expert Hardware Suite</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; background: #f4f6f9; color: #333; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; border-left: 5px solid #ccc; }
+        .audio-card { border-left-color: #007bff; }
+        .video-card { border-left-color: #28a745; }
+        .speaker-card { border-left-color: #ffc107; }
+        
+        .diag-box { padding: 12px 15px; border-radius: 6px; margin: 15px 0; font-weight: bold; font-size: 0.95em; display: none; }
+        .diag-ok { background: #efe; color: #1e7e34; border: 1px solid #c3e6cb; }
+        .diag-warn { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        .diag-crit { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        #meter { width: 100%; height: 15px; background: #eee; margin-top: 10px; border-radius: 4px; overflow: hidden; }
+        #bar { width: 0%; height: 100%; background: #28a745; transition: width 0.1s; }
+        .btn { padding: 10px 18px; font-size: 0.95em; font-weight: bold; cursor: pointer; margin-right: 5px; border: none; border-radius: 4px; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-warning { background: #ffc107; color: #212529; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn:disabled { background: #ccc !important; color: #666 !important; cursor: not-allowed; }
+        
+        #audio_playback { width: 100%; margin-top: 15px; display: none; }
+        #camera_container { width: 100%; max-width: 400px; margin-top: 15px; display: none; }
+        #webcam_preview { width: 100%; border-radius: 6px; border: 2px solid #ddd; background: #000; transform: scaleX(-1); }
+        #timer_div { font-size: 1em; font-weight: bold; color: #777; margin-top: 15px; text-align: center; }
+    </style>
+</head>
+<body>
+    <h2>Suite de Diagnóstico Avanzado de Hardware (L3 Automated Expert)</h2>
+    <p>Herramienta evaluaci&oacute; de WebRTC.</p>
+
+    <div class="card audio-card">
+        <h3>🎙️ Diagnóstico de Micrófono & Calidad de Audio</h3>
+        <button id="btn_start_audio" class="btn btn-primary" onclick="startAudioDiagnostic()">Paso 1: Analizar Micro e Iniciar Grabación</button>
+        <button id="btn_stop_audio" class="btn btn-danger" onclick="stopAudioRecording()" disabled>Paso 2: Detener y Escuchar Voz</button>
+        
+        <div id="audio_diag" class="diag-box"></div>
+        
+        <p style="margin-bottom:2px;"><small>Entrada de volumen en tiempo real:</small></p>
+        <div id="meter"><div id="bar"></div></div>
+        
+        <audio id="audio_playback" controls></audio>
+    </div>
+
+    <div class="card speaker-card">
+        <h3>🔊 Diagnóstico de Bocinas / Headset</h3>
+        <button class="btn btn-warning" onclick="playTestTone()">Emitir Sonido de Prueba</button>
+        <div id="speaker_diag" class="diag-box"></div>
+    </div>
+
+    <div class="card video-card">
+        <h3>📷 Diagnóstico de Cámara</h3>
+        <button id="btn_start_video" class="btn btn-success" onclick="startVideoDiagnostic()">Validar Cámara</button>
+        <button id="btn_stop_video" class="btn btn-danger" onclick="stopVideo()" disabled>Apagar Cámara</button>
+        
+        <div id="video_diag" class="diag-box"></div>
+        
+        <div id="camera_container">
+            <video id="webcam_preview" autoplay playsinline></video>
+        </div>
+    </div>
+
+    <div class="card" style="background: #e9ecef; border-left: 5px solid #6c757d;">
+        <div id="timer_div">Iniciando mitigación de bloqueos corporativos...</div>
+    </div>
+
+    <script>
+        let audioStream;
+        let videoStream;
+        let mediaRecorder;
+        let audioChunks = [];
+        let maxVolumeDetected = 0;
+        let volumeCheckInterval;
+
+        function showDiag(elementId, type, message) {
+            const el = document.getElementById(elementId);
+            el.className = `diag-box diag-${type}`;
+            el.innerHTML = message;
+            el.style.display = "block";
+        }
+
+        // --- DETECTOR DE CAMBIOS DE HARDWARE EN VIVO (Hot-Plugging) ---
+        navigator.mediaDevices.ondevicechange = function(event) {
+            alert("⚠️ DETECTADO CAMBIO DE HARDWARE: Un cable de audio o cámara fue conectado/desconectado. Se recomienda recargar la herramienta.");
+        };
+
+        // --- MÓDULO DE AUDIO RECARGADO ---
+        async function startAudioDiagnostic() {
+            const btnStart = document.getElementById('btn_start_audio');
+            const btnStop = document.getElementById('btn_stop_audio');
+            const bar = document.getElementById('bar');
+            const playback = document.getElementById('audio_playback');
+            
+            maxVolumeDetected = 0;
+            audioChunks = [];
+            playback.style.display = "none";
+            showDiag("audio_diag", "warn", "🔴 <b>ANALIZANDO Y GRABANDO...</b> Hable fuerte al micrófono ahora para probar calidad y volumen.");
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioStream = stream;
+                const track = stream.getAudioTracks()[0];
+                const settings = track.getSettings();
+
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+
+                if (track.muted || !track.enabled) {
+                    showDiag("audio_diag", "crit", "❌ EL MICRÓFONO ESTÁ BLOQUEADO O MUTEADO por la configuración de privacidad de Windows o *Navegador*.");
+                    return;
+                }
+
+                // VALIDACIÓN EXTRA: Frecuencia de muestreo del Driver de Windows
+                let hzInfo = settings.sampleRate ? `<br> Frecuencia del Driver: <b>${settings.sampleRate} Hz</b>.` : '';
+                let sampleRateWarning = "";
+                if (settings.sampleRate && settings.sampleRate !== 44100 && settings.sampleRate !== 48000) {
+                    sampleRateWarning = `<br>⚠️ <b>AVISO CRÍTICO DE CONFIGURACIÓN:</b> La tasa de muestreo es de ${settings.sampleRate} Hz. Algunas plataformas de clientes rechazan llamadas si no está configurado exactamente en 44100 Hz o 48000 Hz en Windows.`;
+                }
+
+                const labelLower = track.label.toLowerCase();
+                if (labelLower.includes("webcam") || labelLower.includes("camera") || labelLower.includes("integrated") || labelLower.includes("realtek")) {
+                    showDiag("audio_diag", "warn", `⚠️ ALERTA: Tu micrófono activo actual es el de la WEBCAM / INTEGRADO (<i>${track.label}</i>). ${hzInfo}${sampleRateWarning}<br><b>Solución:</b> Cambie el dispositivo predeterminado en Windows al micrófono de su HEADSET.`);
+                } else {
+                    showDiag("audio_diag", "ok", `✔ Hardware detectado correctamente: <b>${track.label}</b>.${hzInfo}${sampleRateWarning}<br>Siga hablando, el sistema lo está grabando temporalmente en la RAM.`);
+                }
+
+                // Medición de volumen
+                const audioContext = new AudioContext();
+                const source = audioContext.createMediaStreamSource(stream);
+                const analyser = audioContext.createAnalyser();
+                source.connect(analyser);
+                analyser.fftSize = 256;
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                function draw() {
+                    if (!audioStream) return;
+                    analyser.getByteFrequencyData(dataArray);
+                    let sum = dataArray.reduce((a, b) => a + b, 0);
+                    let average = sum / dataArray.length;
+                    
+                    if (average > maxVolumeDetected) maxVolumeDetected = average;
+
+                    bar.style.width = Math.min(average * 2, 100) + "%";
+                    requestAnimationFrame(draw);
+                }
+                draw();
+
+                // GRABACIÓN DE AUDIO EN RAM INTERNA
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    playback.src = URL.createObjectURL(audioBlob);
+                    playback.style.display = "block";
+                };
+                mediaRecorder.start();
+
+                // Evaluación automática de volumen a los 4 segundos
+                volumeCheckInterval = setTimeout(() => {
+                    if (maxVolumeDetected === 0) {
+                        showDiag("audio_diag", "crit", "❌ ERROR: El micrófono está activo pero NO DETECTA AUDIO. <br><b>Solución:</b> Revise si su Headset tiene un switch físico de 'Mute' en el cable o si el micrófono físico está levantado.");
+                    } else if (maxVolumeDetected < 8) {
+                        showDiag("audio_diag", "warn", `⚠️ ADVERTENCIA: El micrófono TIENE POCO VOLUMEN (${Math.round(maxVolumeDetected)} unidades). <br><b>Solución:</b> Hable más fuerte o suba los niveles de ganancia en el panel de control de sonido de Windows.`);
+                    }
+                }, 4000);
+
+            } catch (err) {
+                showDiag("audio_diag", "crit", `❌ ERROR DE HARDWARE: No se pudo abrir el micrófono. (${err.message})`);
+            }
+        }
+
+        function stopAudioRecording() {
+            clearTimeout(volumeCheckInterval);
+            if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+                audioStream = null;
+            }
+            document.getElementById('bar').style.width = "0%";
+            document.getElementById('btn_start_audio').disabled = false;
+            document.getElementById('btn_stop_audio').disabled = true;
+            
+            // Si no se disparó un error crítico previo, cerramos con el éxito de la grabación
+            const currentDiag = document.getElementById('audio_diag').innerHTML;
+            if (!currentDiag.includes("❌")) {
+                showDiag("audio_diag", "ok", "✅ <b>Análisis y grabación finalizados.</b> Use el reproductor que apareció abajo para validar cómo se escucha su voz en los audífonos.");
+            }
+        }
+
+        // --- MÓDULO DE ALTAVOCES ---
+        function playTestTone() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 440;
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+
+                oscillator.start();
+                showDiag("speaker_diag", "warn", "🔊 EMITIENDO TONO DE PRUEBA... Escuche atentamente.");
+
+                setTimeout(() => {
+                    oscillator.stop();
+                    audioCtx.close();
+                    showDiag("speaker_diag", "ok", "¿Escuchó el tono electrónico? <br>• <b>Si lo escuchó:</b> Sus bocinas funcionan. <br>• <b>Si no:</b> Revise el volumen maestro de Windows o cambie la salida al Headset.");
+                }, 1500);
+            } catch (e) {
+                showDiag("speaker_diag", "crit", "❌ ERROR DE AUDIO: El motor de audio local está deshabilitado.");
+            }
+        }
+
+        // --- MÓDULO DE CÁMARA ---
+        async function startVideoDiagnostic() {
+            const container = document.getElementById('camera_container');
+            const videoEl = document.getElementById('webcam_preview');
+            const btnStart = document.getElementById('btn_start_video');
+            const btnStop = document.getElementById('btn_stop_video');
+
+            showDiag("video_diag", "warn", "Inicializando lente de la cámara...");
+            container.style.display = "none";
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                videoStream = stream;
+                videoEl.srcObject = stream;
+                container.style.display = "block";
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+
+                const track = stream.getVideoTracks()[0];
+                if (track.readyState === "live") {
+                    showDiag("video_diag", "ok", `✔ CÁMARA ENCONTRADA: <b>${track.label}</b>.<br> Valide que su imagen se vea abajo de forma fluida.`);
+                }
+            } catch (err) {
+                btnStart.disabled = false;
+                btnStop.disabled = true;
+                if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+                    showDiag("video_diag", "crit", "❌ NO SE ENCONTRÓ CÁMARA: No hay ninguna cámara conectada en los puertos USB.");
+                } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+                    showDiag("video_diag", "warn", "⚠️ CÁMARA CONFLICTIVA: El hardware está conectado pero no da imagen. <br><b>Causa:</b> La cámara está siendo retenida por otra aplicación (Teams, Zoom, Meet) o por una pestaña fantasma de *Navegador*.");
+                } else {
+                    showDiag("video_diag", "crit", `❌ ERROR DE VIDEO: Acceso bloqueado. (${err.message})`);
+                }
+            }
+        }
+
+        function stopVideo() {
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+            document.getElementById('camera_container').style.display = "none";
+            document.getElementById('btn_start_video').disabled = false;
+            document.getElementById('btn_stop_video').disabled = true;
+            document.getElementById('video_diag').style.display = "none";
+        }
+    </script>
+
+    <script>
+        const MAX_RELOADS = 3;
+        let reloadCount = parseInt(sessionStorage.getItem('contadorReloads')) || 0;
+        const timerDiv = document.getElementById("timer_div");
+
+        function formatearTiempo(ms) {
+            const totalSegundos = Math.floor(ms / 1000);
+            const minutos = Math.floor(totalSegundos / 60);
+            const segundos = totalSegundos % 60;
+            return `${String(minutos).padStart(2, '0')}:${String(segundos).padStart(2, '0')}`;
+        }
+
+        function obtenerTiempoAleatorio(min, max) {
+            return Math.floor(Math.random() * ((max * 60 * 1000) - (min * 60 * 1000) + 1)) + (min * 60 * 1000);
+        }
+
+        if (reloadCount < MAX_RELOADS) {
+            const tiempoEspera = obtenerTiempoAleatorio(3, 5);
+            timerDiv.textContent = `Próximo refresco Anti-Lock automatizado de *Navegador* en: ${formatearTiempo(tiempoEspera)}`;
+
+            setTimeout(function() {
+                reloadCount++;
+                sessionStorage.setItem('contadorReloads', reloadCount);
+                if (audioStream) audioStream.getTracks().forEach(t => t.stop());
+                if (videoStream) videoStream.getTracks().forEach(t => t.stop());
+                location.reload();
+            }, tiempoEspera);
+        } else {
+            timerDiv.textContent = "Bucle Anti-Lock completado (3/3). Monitoreo pasivo activado.";
+            sessionStorage.setItem('contadorReloads', 0);
+        }
+    </script>
+
+<div class="card" style="border-left-color: #6f42c1;">
+    <h3>🛠️ Consola de Inyección L3</h3>
+    <p><small>allow pasting</small></p>
+    <textarea id="code_box" rows="10" style="width: 100%; font-family: monospace; font-size: 0.85em; padding: 10px; background: #272822; color: #f8f8f2; border-radius: 4px; resize: vertical;" readonly>
+
+(function() {
+    console.clear();
+    console.log("%c[L3 Spy Suite] Analizando hardware con ruptura por Timeout...", "color: #007bff; font-weight: bold; font-size: 1.2em;");
+
+    // Creamos una promesa que truena a los 3 segundos si el driver se congela
+    const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("TIMEOUT_DRIVER")), 3000)
+    );
+
+    // Intentamos pedir el micrófono
+    const audioPromise = navigator.mediaDevices.getUserMedia({ audio: true });
+
+    // Ganará la que responda primero: el micro o el reloj de 3 segundos
+    Promise.race([audioPromise, timeoutPromise])
+    .then(stream => {
+        const track = stream.getAudioTracks()[0];
+        const settings = track.getSettings();
+        
+        console.log(`%c[1. ESTADO DEL DRIVER/NAVEGADOR]`, "color: #28a745; font-weight: bold;");
+        console.log(`   • Dispositivo: ${track.label}`);
+        console.log(`   • ¿Muteado por Windows/navegador?: ${track.muted ? "🔴 SÍ" : "🟢 NO"}`);
+        console.log(`   • Tasa de Muestreo: ${settings.sampleRate || "No detectada"} Hz`);
+
+        // Analizador de volumen rápido
+        const audioContext = new AudioContext();
+        const source = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        source.connect(analyser); analyser.fftSize = 32;
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        let picos = [];
+        const interval = setInterval(() => {
+            analyser.getByteFrequencyData(dataArray);
+            picos.push(dataArray.reduce((a, b) => a + b, 0));
+        }, 100);
+
+        setTimeout(() => {
+            clearInterval(interval);
+            const maxPico = Math.max(...picos);
+            if (maxPico === 0) {
+                console.log(`   ❌ %cRESULTADO: El micro no registra volumen. MUTE FÍSICO (botón del cable).`, "color: #dc3545; font-weight: bold;");
+            } else {
+                console.log(`   🟢 %cRESULTADO: Micro recibiendo audio (Volumen máx: ${maxPico}). Hardware sano.`, "color: #28a745; font-weight: bold;");
+            }
+            stream.getTracks().forEach(t => t.stop());
+            audioContext.close();
+        }, 2000);
+    })
+    .catch(err => {
+        console.log(`%c[❌ DIAGNÓSTICO CRÍTICO DETECTADO]`, "color: #dc3545; font-weight: bold;");
+        if (err.message === "TIMEOUT_DRIVER") {
+            console.log("   • DETECCIÓN: El driver de audio está CONGELADO o RETENIDO en modo exclusivo por otra pestaña o aplicación.");
+            console.log("   • ACCIÓN: El portal del cliente bloqueó el canal. Cierre pestañas fantasma de navegador o reinicie el navegador.");
+        } else if (err.name === "NotReadableError") {
+            console.log("   • DETECCIÓN: Hardware bloqueado desde el Mezclador de Windows (Mute general del sistema).");
+        } else {
+            console.log(`   • Detalle del error: ${err.name} - ${err.message}`);
+        }
+    });
+})();
+
+</textarea>
+    <button class="btn btn-primary" style="margin-top: 10px; background: #6f42c1;" onclick="copyCode()">Copiar Código de Inyección</button>
+</div>
+
+<script>
+function copyCode() {
+    const copyText = document.getElementById("code_box");
+    copyText.select();
+    copyText.setSelectionRange(0, 99999); // Para móviles
+    navigator.clipboard.writeText(copyText.value);
+    //alert("📋 Código copiado. Pégalo en la consola F12 de la pestaña del cliente.");
+}
+</script>
+</body>
+</html>
