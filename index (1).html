@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>L3 Expert Hardware Suite - Selector de Dispositivos</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; background: #f4f6f9; color: #333; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; border-left: 5px solid #ccc; }
+        .audio-card { border-left-color: #007bff; }
+        .video-card { border-left-color: #28a745; }
+        .speaker-card { border-left-color: #ffc107; }
+        
+        .diag-box { padding: 12px 15px; border-radius: 6px; margin: 15px 0; font-weight: bold; font-size: 0.95em; display: none; }
+        .diag-ok { background: #efe; color: #1e7e34; border: 1px solid #c3e6cb; }
+        .diag-warn { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        .diag-crit { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        #meter { width: 100%; height: 15px; background: #eee; margin-top: 10px; border-radius: 4px; overflow: hidden; }
+        #bar { width: 0%; height: 100%; background: #28a745; transition: width 0.1s; }
+        
+        select { width: 100%; padding: 8px; margin: 10px 0 15px 0; border-radius: 4px; border: 1px solid #ccc; background: #fff; font-size: 0.95em; }
+        
+        .btn { padding: 10px 18px; font-size: 0.95em; font-weight: bold; cursor: pointer; margin-right: 5px; border: none; border-radius: 4px; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-warning { background: #ffc107; color: #212529; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn:disabled { background: #ccc !important; color: #666 !important; cursor: not-allowed; }
+        
+        #audio_playback { width: 100%; margin-top: 15px; display: none; }
+        #camera_container { width: 100%; max-width: 400px; margin-top: 15px; display: none; }
+        #webcam_preview { width: 100%; border-radius: 6px; border: 2px solid #ddd; background: #000; transform: scaleX(-1); }
+        #timer_div { font-size: 1em; font-weight: bold; color: #777; margin-top: 15px; text-align: center; }
+    </style>
+</head>
+<body>
+    <h2>Suite de Diagnóstico Avanzado de Hardware (L3 Automated Expert)</h2>
+    <p>Herramienta evaluación de WebRTC con selector de hardware.</p>
+
+    <!-- CARD DE AUDIO -->
+    <div class="card audio-card">
+        <h3>🎙️ Diagnóstico de Micrófono & Calidad de Audio</h3>
+        
+        <label for="select_audio"><b>Selecciona el Micrófono a evaluar:</b></label>
+        <select id="select_audio" onchange="stopAudioRecording()"></select>
+
+        <button id="btn_start_audio" class="btn btn-primary" onclick="startAudioDiagnostic()">Paso 1: Analizar e Iniciar Grabación</button>
+        <button id="btn_stop_audio" class="btn btn-danger" onclick="stopAudioRecording()" disabled>Paso 2: Detener y Escuchar Voz</button>
+        
+        <div id="audio_diag" class="diag-box"></div>
+        
+        <p style="margin-bottom:2px;"><small>Entrada de volumen en tiempo real:</small></p>
+        <div id="meter"><div id="bar"></div></div>
+        
+        <audio id="audio_playback" controls></audio>
+    </div>
+
+    <!-- CARD DE BOCINAS -->
+    <div class="card speaker-card">
+        <h3>🔊 Diagnóstico de Bocinas / Headset</h3>
+        <p><small>Nota: WebRTC delega la salida de audio al dispositivo predeterminado del sistema operativo.</small></p>
+        <button class="btn btn-warning" onclick="playTestTone()">Emitir Sonido de Prueba</button>
+        <div id="speaker_diag" class="diag-box"></div>
+    </div>
+
+    <!-- CARD DE VIDEO -->
+    <div class="card video-card">
+        <h3>📷 Diagnóstico de Cámara</h3>
+        
+        <label for="select_video"><b>Selecciona la Cámara a evaluar:</b></label>
+        <select id="select_video" onchange="stopVideo()"></select>
+
+        <button id="btn_start_video" class="btn btn-success" onclick="startVideoDiagnostic()">Validar Cámara</button>
+        <button id="btn_stop_video" class="btn btn-danger" onclick="stopVideo()" disabled>Apagar Cámara</button>
+        
+        <div id="video_diag" class="diag-box"></div>
+        
+        <div id="camera_container">
+            <video id="webcam_preview" autoplay playsinline></video>
+        </div>
+    </div>
+
+    <!-- CARD DE MITIGACIÓN -->
+    <div class="card" style="background: #e9ecef; border-left: 5px solid #6c757d;">
+        <div id="timer_div">Iniciando mitigación de bloqueos corporativos...</div>
+    </div>
+
+    <script>
+        let audioStream;
+        let videoStream;
+        let mediaRecorder;
+        let audioChunks = [];
+        let maxVolumeDetected = 0;
+        let volumeCheckInterval;
+        let audioContext;
+
+        function showDiag(elementId, type, message) {
+            const el = document.getElementById(elementId);
+            el.className = `diag-box diag-${type}`;
+            el.innerHTML = message;
+            el.style.display = "block";
+        }
+
+        // Cargar la lista de dispositivos conectados al iniciar la app
+        async function cargarDispositivos() {
+            try {
+                // Pedimos un permiso rápido temporal solo para que el navegador nos deje leer las etiquetas/nombres de los hardware
+                const streamTemporal = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                streamTemporal.getTracks().forEach(track => track.stop()); // Apagamos de inmediato
+
+                const dispositivos = await navigator.mediaDevices.enumerateDevices();
+                const selectAudio = document.getElementById('select_audio');
+                const selectVideo = document.getElementById('select_video');
+                
+                selectAudio.innerHTML = "";
+                selectVideo.innerHTML = "";
+
+                dispositivos.forEach(dispositivo => {
+                    const option = document.createElement('option');
+                    option.value = dispositivo.deviceId;
+                    
+                    if (dispositivo.kind === 'audioinput') {
+                        option.text = dispositivo.label || `Micrófono Desconocido (${dispositivo.deviceId.slice(0,5)}...)`;
+                        selectAudio.appendChild(option);
+                    } else if (dispositivo.kind === 'videoinput') {
+                        option.text = dispositivo.label || `Cámara Desconocida (${dispositivo.deviceId.slice(0,5)}...)`;
+                        selectVideo.appendChild(option);
+                    }
+                });
+
+                if(selectAudio.length === 0) {
+                    selectAudio.innerHTML = "<option value=''>❌ No se encontraron micrófonos disponibles</option>";
+                }
+                if(selectVideo.length === 0) {
+                    selectVideo.innerHTML = "<option value=''>❌ No se encontraron cámaras disponibles</option>";
+                }
+
+            } catch (err) {
+                showDiag("audio_diag", "crit", `❌ ERROR DE PERMISOS: Para poder listar tus dispositivos, debes otorgar permisos de cámara/micrófono al navegador.`);
+            }
+        }
+
+        // Escuchar si conectan o desconectan hardware para actualizar las listas
+        navigator.mediaDevices.ondevicechange = function(event) {
+            cargarDispositivos();
+            alert("⚠️ CAMBIO DE HARDWARE DETECTADO: Se ha actualizado la lista de dispositivos seleccionables automáticamente.");
+        };
+
+        // Ejecutar carga inicial
+        window.onload = cargarDispositivos;
+
+        // --- DIAGNÓSTICO DE AUDIO OPTIMIZADO CON SELECTOR ---
+        async function startAudioDiagnostic() {
+            const btnStart = document.getElementById('btn_start_audio');
+            const btnStop = document.getElementById('btn_stop_audio');
+            const bar = document.getElementById('bar');
+            const playback = document.getElementById('audio_playback');
+            const deviceIdSeleccionado = document.getElementById('select_audio').value;
+            
+            if(!deviceIdSeleccionado) {
+                showDiag("audio_diag", "crit", "❌ Selecciona un micrófono válido primero.");
+                return;
+            }
+
+            maxVolumeDetected = 0;
+            audioChunks = [];
+            playback.style.display = "none";
+            showDiag("audio_diag", "warn", "🔴 <b>ANALIZANDO Y GRABANDO...</b> Hable fuerte al micrófono ahora para probar calidad y volumen.");
+            
+            try {
+                // Restringimos getUserMedia para que use estrictamente el ID del dispositivo del Select
+                const constraints = { 
+                    audio: { deviceId: deviceIdSeleccionado ? { exact: deviceIdSeleccionado } : undefined } 
+                };
+                
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                audioStream = stream;
+                const track = stream.getAudioTracks()[0];
+                const settings = track.getSettings();
+
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+
+                track.onmute = () => {
+                    showDiag("audio_diag", "crit", "❌ ¡ALERTA EN VIVO!: El flujo de audio se ha interrumpido. Windows o el navegador han bloqueado o silenciado el hardware de forma externa.");
+                };
+
+                let hzInfo = settings.sampleRate ? `<br> Frecuencia del Driver: <b>${settings.sampleRate} Hz</b>.` : '';
+                let sampleRateWarning = "";
+                if (settings.sampleRate && settings.sampleRate !== 44100 && settings.sampleRate !== 48000) {
+                    sampleRateWarning = `<br>⚠️ <b>AVISO CRÍTICO DE CONFIGURACIÓN:</b> La tasa de muestreo es de ${settings.sampleRate} Hz. Algunas plataformas rechazan llamadas si no está en 44100 Hz o 48000 Hz en Windows (Propiedades del micro -> Opciones avanzadas -> Formato predeterminado).`;
+                }
+
+                const labelLower = track.label.toLowerCase();
+                if (labelLower.includes("webcam") || labelLower.includes("camera") || labelLower.includes("integrated") || labelLower.includes("realtek")) {
+                    showDiag("audio_diag", "warn", `⚠️ AVISO DE CONVERGENCIA: Estás evaluando el micrófono integrado/webcam (<i>${track.label}</i>). ${hzInfo}${sampleRateWarning}<br><b>Recomendación:</b> Si tu portal exige headset, cambia el selector de arriba a tu dispositivo dedicado.`);
+                } else {
+                    showDiag("audio_diag", "ok", `✔ Evaluando de forma exclusiva: <b>${track.label}</b>.${hzInfo}${sampleRateWarning}<br>Siga hablando, el sistema lo está grabando temporalmente en la RAM.`);
+                }
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(stream);
+                const analyser = audioContext.createAnalyser();
+                source.connect(analyser);
+                analyser.fftSize = 256;
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                function draw() {
+                    if (!audioStream) return;
+                    analyser.getByteFrequencyData(dataArray);
+                    let sum = dataArray.reduce((a, b) => a + b, 0);
+                    let average = sum / dataArray.length;
+                    
+                    if (average > maxVolumeDetected) maxVolumeDetected = average;
+
+                    bar.style.width = Math.min(average * 2, 100) + "%";
+                    requestAnimationFrame(draw);
+                }
+                draw();
+
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = event => { audioChunks.push(event.data); };
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    playback.src = URL.createObjectURL(audioBlob);
+                    playback.style.display = "block";
+                };
+                mediaRecorder.start();
+
+                volumeCheckInterval = setTimeout(() => {
+                    if (maxVolumeDetected === 0) {
+                        showDiag("audio_diag", "crit", "❌ ERROR: El micrófono seleccionado no registra audio. <br><b>Causas probables:</b> Switch físico de 'Mute' activo en el cable o volumen en 0% en los niveles de este hardware específico en Windows.");
+                    } else if (maxVolumeDetected < 6) {
+                        showDiag("audio_diag", "warn", `⚠️ ADVERTENCIA: Ganancia baja en este dispositivo (${Math.round(maxVolumeDetected)} unidades). <br><b>Solución:</b> Ajusta los niveles individuales de este micrófono en Windows.`);
+                    }
+                }, 4000);
+
+            } catch (err) {
+                if(err.name === "NotReadableError" || err.name === "TrackStartError") {
+                    showDiag("audio_diag", "crit", `❌ ERROR DE CONFLICTO: Este micrófono específico está siendo retenido en modo exclusivo por otra aplicación activa.`);
+                } else {
+                    showDiag("audio_diag", "crit", `❌ ERROR DE HARDWARE: No se pudo abrir el dispositivo. (${err.message})`);
+                }
+            }
+        }
+
+        function stopAudioRecording() {
+            clearTimeout(volumeCheckInterval);
+            if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+                audioStream = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+            document.getElementById('bar').style.width = "0%";
+            document.getElementById('btn_start_audio').disabled = false;
+            document.getElementById('btn_stop_audio').disabled = true;
+            
+            const currentDiag = document.getElementById('audio_diag').innerHTML;
+            if (currentDiag && !currentDiag.includes("❌")) {
+                showDiag("audio_diag", "ok", "✅ <b>Análisis finalizado.</b> Escucha el reproductor para validar la nitidez de este dispositivo.");
+            }
+        }
+
+        // --- DIAGNÓSTICO DE CÁMARA CON SELECTOR ---
+        async function startVideoDiagnostic() {
+            const container = document.getElementById('camera_container');
+            const videoEl = document.getElementById('webcam_preview');
+            const btnStart = document.getElementById('btn_start_video');
+            const btnStop = document.getElementById('btn_stop_video');
+            const deviceIdSeleccionado = document.getElementById('select_video').value;
+
+            if(!deviceIdSeleccionado) {
+                showDiag("video_diag", "crit", "❌ Selecciona una cámara válida primero.");
+                return;
+            }
+
+            showDiag("video_diag", "warn", "Inicializando lente del hardware seleccionado...");
+            container.style.display = "none";
+
+            try {
+                const constraints = { 
+                    video: { 
+                        deviceId: deviceIdSeleccionado ? { exact: deviceIdSeleccionado } : undefined,
+                        width: 640, 
+                        height: 480 
+                    } 
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                videoStream = stream;
+                videoEl.srcObject = stream;
+                container.style.display = "block";
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+
+                const track = stream.getVideoTracks()[0];
+                if (track.readyState === "live") {
+                    showDiag("video_diag", "ok", `✔ ANALIZANDO EXCLUSIVAMENTE: <b>${track.label}</b>.<br> Verifique la fluidez óptica abajo.`);
+                }
+            } catch (err) {
+                btnStart.disabled = false;
+                btnStop.disabled = true;
+                if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+                    showDiag("video_diag", "warn", "⚠️ CÁMARA BLOQUEADA: Este lente está en uso exclusivo por otra aplicación (Teams, Zoom, etc.). Ciérrelas e intente de nuevo.");
+                } else {
+                    showDiag("video_diag", "crit", `❌ ERROR DE VIDEO: Acceso bloqueado. (${err.message})`);
+                }
+            }
+        }
+
+        function stopVideo() {
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+            document.getElementById('camera_container').style.display = "none";
+            document.getElementById('btn_start_video').disabled = false;
+            document.getElementById('btn_stop_video').disabled = true;
+            if(document.getElementById('video_diag').style.display !== "none"){
+                 document.getElementById('video_diag').style.display = "none";
+            }
+        }
+
+        // --- MANEJO DEL TONO DE PRUEBA AUDIO ---
+        function playTestTone() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 440;
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+
+                oscillator.start();
+                showDiag("speaker_diag", "warn", "🔊 EMITIENDO TONO DE PRUEBA... Escuche atentamente.");
+
+                setTimeout(() => {
+                    oscillator.stop();
+                    audioCtx.close();
+                    showDiag("speaker_diag", "ok", "¿Escuchó el tono electrónico? Confirme que salga por sus audífonos de trabajo.");
+                }, 1500);
+            } catch (e) {
+                showDiag("speaker_diag", "crit", "❌ ERROR DE AUDIO: El motor de audio local está deshabilitado.");
+            }
+        }
+
+        // --- REFRESCADOR ANTI-LOCK ---
+        const MAX_RELOADS = 3;
+        let reloadCount = parseInt(sessionStorage.getItem('contadorReloads')) || 0;
+        const timerDiv = document.getElementById("timer_div");
+        let tiempoRestante = Math.floor(Math.random() * (5 * 60 * 1000 - 3 * 60 * 1000 + 1)) + (3 * 60 * 1000);
+
+        if (reloadCount < MAX_RELOADS) {
+            const interval = setInterval(() => {
+                if (audioStream || videoStream) {
+                    timerDiv.textContent = `⏳ Refresco en pausa: Dispositivo en uso activo...`;
+                    return;
+                }
+
+                tiempoRestante -= 1000;
+                timerDiv.textContent = `Próximo refresco Anti-Lock automatizado en: ${formatearTiempo(tiempoRestante)}`;
+
+                if (tiempoRestante <= 0) {
+                    clearInterval(interval);
+                    reloadCount++;
+                    sessionStorage.setItem('contadorReloads', reloadCount);
+                    location.reload();
+                }
+            }, 1000);
+        } else {
+            timerDiv.textContent = "Bucle Anti-Lock completado (3/3). Monitoreo pasivo activado.";
+            sessionStorage.setItem('contadorReloads', 0);
+        }
+
+        function formatearTiempo(ms) {
+            const totalSegundos = Math.floor(ms / 1000);
+            const minutos = Math.floor(totalSegundos / 60);
+            const segundos = totalSegundos % 60;
+            return `${String(minutos).padStart(2, '0')}:${String(segundos).padStart(2, '0')}`;
+        }
+    </script>
+</body>
+</html>
