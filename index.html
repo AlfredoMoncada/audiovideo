@@ -114,7 +114,9 @@
                 
                 selectAudio.innerHTML = "";
                 selectVideo.innerHTML = "";
-
+// Cambiar la línea 106 por esto:
+const streamTemporal = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
                 dispositivos.forEach(dispositivo => {
                     const option = document.createElement('option');
                     option.value = dispositivo.deviceId;
